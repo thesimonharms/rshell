@@ -253,10 +253,10 @@ impl Parser {
                 self.pos += 1;
                 Some(Expr::Float(f))
             }
-	    Token::Str(s)    => {
-		self.pos += 1;
-		Some(Expr::Str(s))
-	    }
+            Token::Str(s) => {
+                self.pos += 1;
+                Some(Expr::Str(s))
+            }
             Token::Ident(name) => {
                 let name = name.clone();
                 self.pos += 1;
@@ -307,7 +307,7 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
     match expr {
         Expr::Number(n) => Some(Value::Int(*n)),
         Expr::Float(f) => Some(Value::Float(*f)),
-	Expr::Str(s)    => Some(Value::String(s.clone())),
+        Expr::Str(s) => Some(Value::String(s.clone())),
 
         // Function or special form call
         Expr::Call { name, args } => match name.as_str() {
@@ -334,7 +334,7 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                 // If second arg is a func(...) definition, store as closure directly
                 if let Expr::Call {
                     name: fname,
-                    args: fargs,
+                    args: _fargs,
                 } = value_expr
                 {
                     if fname == "func" {
@@ -512,9 +512,17 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
             "==" => eq_op(&args, true, env),
             "!=" => eq_op(&args, false, env),
 
+            // Logical operators
+            "and" => logical_and(&args, env),
+            "or" => logical_or(&args, env),
+            "not" => logical_not(&args, env),
+            "xor" => logical_xor(&args, env),
+
             // Other builtins
             "echo" => expr_echo(&args, env),
             "float" => cast_float(&args, env),
+            "len" => len_builtin(&args, env),
+            "reverse" => reverse_builtin(&args, env),
             "__dbg_info" => {
                 println!("rshell v0.1 by Simon Harms");
                 None
@@ -623,10 +631,11 @@ fn cast_float(args: &[Expr], env: &mut Env) -> Option<Value> {
 /// Binary operation helper for +, -, *, /, %
 fn binop(args: &[Expr], kind: BinOpKind, env: &mut Env) -> Option<Value> {
     if args.len() != 2 {
-        println!("Expected 2 arguments");
+        println!("Expected 2 or more arguments");
         return None;
-    }
+    } // Originally this only worked with 2 arguments, that's why it is named binop
 
+    //println!("{:?}", args);
     let a = eval(&args[0], env)?;
     let b = eval(&args[1], env)?;
 
@@ -730,9 +739,87 @@ fn eq_op(args: &[Expr], expect_equal: bool, env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(if expect_equal { eq } else { !eq }))
 }
 
-enum ResultType {
-    Int,
-    Float,
+fn eval_bool(expr: &Expr, env: &mut Env) -> Option<bool> {
+    match eval(expr, env)? {
+        Value::Boolean(b) => Some(b),
+        other => {
+            println!("Type error: expected bool, got {:?}", other);
+            None
+        }
+    }
+}
+
+fn logical_and(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 2 {
+        println!("and() expects 2 arguments");
+        return None;
+    }
+    let a = eval_bool(&args[0], env)?;
+    if !a {
+        return Some(Value::Boolean(false)); // short-circuit
+    }
+    let b = eval_bool(&args[1], env)?;
+    Some(Value::Boolean(b))
+}
+
+fn logical_or(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 2 {
+        println!("or() expects 2 arguments");
+        return None;
+    }
+    let a = eval_bool(&args[0], env)?;
+    if a {
+        return Some(Value::Boolean(true)); // short-circuit
+    }
+    let b = eval_bool(&args[1], env)?;
+    Some(Value::Boolean(b))
+}
+
+fn logical_not(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 1 {
+        println!("not() expects 1 argument");
+        return None;
+    }
+    let a = eval_bool(&args[0], env)?;
+    Some(Value::Boolean(!a))
+}
+
+fn logical_xor(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 2 {
+        println!("xor() expects 2 arguments");
+        return None;
+    }
+    let a = eval_bool(&args[0], env)?;
+    let b = eval_bool(&args[1], env)?;
+    Some(Value::Boolean(a ^ b))
+}
+
+fn len_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 1 {
+        eprintln!("len() expects 1 argument");
+        return None;
+    }
+    match eval(&args[0], env)? {
+        Value::String(s) => Some(Value::Int(s.chars().count() as i32)),
+        other => {
+            eprintln!("TypeError: len() expects string, got {:?}", other);
+            None
+        }
+    }
+}
+
+fn reverse_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
+    if args.len() != 1 {
+        eprintln!("reverse() expects 1 argument");
+        return None;
+    }
+    match eval(&args[0], env)? {
+        Value::String(s) => Some(Value::String(s.chars().rev().collect())),
+        other => {
+            eprintln!("TypeError: reverse() expects string, got {:?}", other);
+            None
+        }
+    }
 }
 
 fn run_repl() -> io::Result<()> {
@@ -753,7 +840,7 @@ fn run_repl() -> io::Result<()> {
             break;
         }
 
-        evaluate_line(trimmed.to_string(), &mut env);
+        evaluate_line(trimmed.to_string(), &mut env)?;
 
         stdout.write_all(trimmed.as_bytes())?;
         stdout.write_all(b"\n")?;
@@ -763,7 +850,7 @@ fn run_repl() -> io::Result<()> {
 }
 
 /// Run parser + evaluator for one line of REPL input
-fn evaluate_line(input: String, env: &mut Env) -> std::io::Result<()> {
+fn evaluate_line(input: String, env: &mut Env) -> io::Result<()> {
     let tokens = tokenize(&input);
     let mut parser = Parser::new(tokens);
 
