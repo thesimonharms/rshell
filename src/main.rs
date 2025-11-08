@@ -4,59 +4,129 @@ use std::io::{self, Write};
 /// Environment: a map of variable/function names to runtime values
 type Env = HashMap<String, Value>;
 
-/// Tokens produced by the tokenizer from input text
+/// Tokens produced by the tokenizer from input text. Represents the smallest meaningful
+/// element of the source code after lexing.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Ident(String), // e.g. "+", "__dbg_info"
-    Number(i32),   // e.g. 42
-    Float(f64),    // e.g. 42.42
+    /// An identifier, used for variable names, function names, operators (+, -), and built-ins.
+    Ident(String),
+    /// An integer literal, stored as a 32-bit signed integer.
+    Number(i32),
+    /// A floating-point literal, stored as a 64-bit float.
+    Float(f64),
+    /// A string literal, supporting escape sequences (e.g., \n, \t).
     Str(String),
-    LParen, // (
-    RParen, // )
-    Comma,  // ,
+    /// The opening parenthesis token: `(`.
+    LParen,
+    /// The closing parenthesis token: `)`.
+    RParen,
+    /// The comma separator token: `,`.
+    Comma,
 }
 
-/// AST node types for parsed expressions
+/// AST node types for parsed expressions. Represents the structure of the program
+/// after parsing, forming the Abstract Syntax Tree.
 #[derive(Debug, Clone)]
 enum Expr {
+    /// A literal integer value.
     Number(i32),
+    /// A literal floating-point value.
     Float(f64),
+    /// An identifier used for variable lookups, function names, or operators.
     Ident(String),
+    /// A literal string value.
     Str(String),
-    Call { name: String, args: Vec<Expr> },
-}
-
-/// Runtime values the interpreter can hold and operate on
-#[derive(Debug, Clone)]
-enum Value {
-    Float(f64),
-    Int(i32),
-    String(String),
-    Boolean(bool),
-
-    /// A function/closure value
-    /// - Stores the parameter name, its type, the return type,
-    ///   the function body, and the captured environment
-    Closure {
-        param_name: String,
-        param_type: Type,
-        ret_type: Type,
-        body: Box<Expr>,
-        env: Env, // captured env at definition time
+    /// A function call or special form (like `let`, `if`, or an operator like `+`).
+    Call {
+        /// The name of the function or operator being called (e.g., "let", "+").
+        name: String,
+        /// The vector of arguments, which are themselves expressions to be evaluated.
+        args: Vec<Expr>,
     },
 }
 
-/// Type information (declared/expected) — used for type checking/coercion
-#[derive(Debug, Clone, PartialEq)]
-enum Type {
-    Int,
-    Float,
-    Bool,
-    String,
-    Unknown, // fallback for unrecognized types
+/// Runtime values the interpreter can hold and operate on. All evaluation results are one of these variants.
+#[derive(Debug, Clone)]
+enum Value {
+    /// A runtime floating-point number.
+    Float(f64),
+    /// A runtime integer.
+    Int(i32),
+    /// A runtime string.
+    String(String),
+    /// A runtime boolean value.
+    Boolean(bool),
+
+    /// A function/closure value, capturing its environment for lexical scoping.
+    Closure {
+        /// The names of the parameters accepted by this function.
+        param_names: Vec<String>,
+        /// The declared types of the parameters.
+        param_types: Vec<Type>,
+        /// The declared return type of the function.
+        ret_type: Type,
+        /// The body of the function, stored as an unevaluated AST expression.
+        body: Box<Expr>,
+        /// The environment captured at the time the function was defined.
+        env: Env, 
+    },
 }
 
-/// Helper: convert a string like "int" into a Type enum
+impl Value {
+    /// Checks if two `Value` instances share the exact same enum variant (i.e., the same type),
+    /// ignoring the data they hold.
+    ///
+    /// # Note
+    ///
+    /// This implementation currently only returns `true` for matching numeric types (`Int` and `Float`)
+    /// and `false` for all other type comparisons, including non-numeric types and comparison
+    /// between two different numeric types (e.g., Int vs. Float).
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - The first `Value` instance.
+    /// * `other` - A reference to the second `Value` instance for comparison.
+    ///
+    /// # Returns
+    ///
+    /// `true` if both `self` and `other` are the same numeric variant, `false` otherwise.
+    pub fn is_same_variant(&self, other: &Value) -> bool {
+        // TODO: add capability to make it work with strings and other types like booleans.
+        match (self, other) {
+            // Works only with specified Value shapes
+            (Value::Int(_), Value::Int(_)) => true,
+            (Value::Float(_), Value::Float(_)) => true,
+            // Fails on everything else
+            _ => false,
+        }
+    }
+}
+
+/// Type information (declared/expected) — used for type checking and coercion.
+#[derive(Debug, Clone, PartialEq)]
+enum Type {
+    /// Represents the integer type (`i32`).
+    Int,
+    /// Represents the floating-point type (`f64`).
+    Float,
+    /// Represents the boolean type.
+    Bool,
+    /// Represents the string type.
+    String,
+    /// A fallback used for unrecognized or generic types.
+    Unknown,
+}
+
+/// Helper: Converts a string representation of a type (e.g., "int") into the corresponding
+/// `Type` enum variant.
+///
+/// # Arguments
+///
+/// * `name` - The string slice representing the type name.
+///
+/// # Returns
+///
+/// The matching `Type` variant, or `Type::Unknown` if no match is found.
 fn parse_type(name: &str) -> Type {
     match name {
         "int" => Type::Int,
@@ -76,61 +146,87 @@ impl std::fmt::Display for Value {
             Value::String(s) => write!(f, "{}", s),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Closure {
-                param_name,
-                param_type,
+                param_types,
                 ret_type,
                 ..
             } => {
+                let params_str: Vec<String> =
+                    param_types.iter().map(|t| format!("{:?}", t)).collect();
                 write!(
                     f,
-                    "<closure {}: {:?} -> {:?}>",
-                    param_name, param_type, ret_type
+                    "<closure ({}) -> {:?}>",
+                    params_str.join(", "),
+                    ret_type
                 )
             }
         }
     }
 }
 
-/// Binary operator kinds
+/// Binary operator kinds. Used within the `binop` function to dispatch the correct arithmetic operation.
 #[derive(Clone, Copy)]
 enum BinOpKind {
+    /// The addition operation (`+`).
     Add,
+    /// The subtraction operation (`-`).
     Sub,
+    /// The multiplication operation (`*`).
     Mul,
+    /// The division operation (`/`).
     Div,
+    /// The modulo operation (`%`).
     Mod,
 }
 
+/// The main entry point of the program. Initializes and runs the Read-Eval-Print Loop (REPL).
+///
+/// # Returns
+///
+/// An `io::Result<()>` indicating success or any I/O error encountered during the REPL session.
 fn main() -> io::Result<()> {
     run_repl()
 }
 
-/// Tokenize raw input string into a sequence of Tokens
+/// Tokenizes the raw input string into a sequence of `Token`s.
+/// Handles literals (numbers, floats, strings with escapes), identifiers, and delimiters.
+///
+/// # Arguments
+///
+/// * `input` - The raw string input from the user/file.
+///
+/// # Returns
+///
+/// A `Vec<Token>` representing the stream of tokens. Prints error messages for unknown characters.
 fn tokenize(input: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut chars = input.chars().peekable();
+    let mut tokens = Vec::new(); // This is the final token variable we'll return
+    let mut chars = input.chars().peekable(); // Converts to the Peekable Iterator type (.iter and .peek)
 
     while let Some(&ch) = chars.peek() {
         match ch {
+            // Left parenthesis handling
             '(' => {
                 tokens.push(Token::LParen);
                 chars.next();
             }
+            // Right parenthesis handling
             ')' => {
                 tokens.push(Token::RParen);
                 chars.next();
             }
+            // Comma handling
             ',' => {
                 tokens.push(Token::Comma);
                 chars.next();
             }
 
+            // Quote handling
             '"' | '\'' => {
                 let quote = ch;
                 chars.next(); // consume opening quote
                 let mut s = String::new();
                 while let Some(&c) = chars.peek() {
                     chars.next();
+                    // when encountering the other quote, break
                     if c == quote {
                         break;
                     }
@@ -158,15 +254,16 @@ fn tokenize(input: &str) -> Vec<Token> {
                         s.push(c);
                     }
                 }
+                // Push the string to the tokens vector
                 tokens.push(Token::Str(s));
             }
 
             // Number or float literal
             '0'..='9' => {
-                let mut number = String::new();
-                let mut has_dot = false;
+                let mut number = String::new(); // store the number as a string literal during tokenization
+                let mut has_dot = false; // flag for when the number contains a decimal component
 
-                while let Some(&c) = chars.peek() {
+                while let Some(&c) = chars.peek() { // decimal logic and error checking
                     if c.is_digit(10) {
                         number.push(c);
                         chars.next();
@@ -183,14 +280,14 @@ fn tokenize(input: &str) -> Vec<Token> {
                     match number.parse::<f64>() {
                         Ok(f) => tokens.push(Token::Float(f)),
                         Err(_) => {
-                            println!("Invalid float literal: {}", number);
+                            eprintln!("Invalid float literal: {}", number);
                         }
                     }
                 } else {
                     match number.parse::<i32>() {
                         Ok(i) => tokens.push(Token::Number(i)),
                         Err(_) => {
-                            println!("Invalid integer literal: {}", number);
+                            eprintln!("Invalid integer literal: {}", number);
                         }
                     }
                 }
@@ -221,12 +318,28 @@ fn tokenize(input: &str) -> Vec<Token> {
     tokens
 }
 
-/// First char of an identifier must be letter or symbol like + - * / % _
+/// Determines if a character is valid as the starting character of an identifier or operator.
+///
+/// # Arguments
+///
+/// * `c` - The character to check.
+///
+/// # Returns
+///
+/// `true` if the character can start an identifier/operator, `false` otherwise.
 fn is_ident_start(c: char) -> bool {
     c.is_alphabetic() || "+-*/%_<>!=.".contains(c)
 }
 
-/// Rest of identifier may also contain digits
+/// Determines if a character is valid for any position (after the start) of an identifier or operator.
+///
+/// # Arguments
+///
+/// * `c` - The character to check.
+///
+/// # Returns
+///
+/// `true` if the character can be part of an identifier/operator, `false` otherwise.
 fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || "+-*/%_<>!=.".contains(c)
 }
@@ -238,11 +351,22 @@ struct Parser {
 }
 
 impl Parser {
+    /// Creates a new `Parser` instance, initializing its token stream and position.
+    ///
+    /// # Arguments
+    ///
+    /// * `tokens` - The vector of tokens generated by the tokenizer.
     fn new(tokens: Vec<Token>) -> Self {
         Parser { tokens, pos: 0 }
     }
 
-    /// Parse an expression: number, float, identifier, or function call
+    /// Parses a single top-level expression from the token stream.
+    /// Handles literals (`Number`, `Float`, `Str`), identifiers (`Ident`), and function calls (`Call`).
+    /// Implements lookahead to distinguish identifiers from function calls.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<Expr>` containing the parsed AST node on success, or `None` on a parsing error.
     fn parse_expr(&mut self) -> Option<Expr> {
         match self.peek().cloned()? {
             Token::Number(n) => {
@@ -297,12 +421,73 @@ impl Parser {
         }
     }
 
+    /// Returns a reference to the token at the current position without consuming it.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&Token>` which is `Some` if there are more tokens, or `None` if at the end of the stream.
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos)
     }
 }
 
-/// Evaluate an AST expression into a runtime Value
+/// Parses a parameter specification from an expression, e.g., `int(x)`.
+///
+/// # Arguments
+///
+/// * `expr` - The expression to parse.
+///
+/// # Returns
+///
+/// An `Option` containing a tuple of the parameter name (`String`) and its `Type`,
+/// or `None` if the expression is not a valid parameter specification.
+fn parse_param_spec(expr: &Expr) -> Option<(String, Type)> {
+    if let Expr::Call { name, args } = expr {
+        if args.len() == 1 {
+            if let Expr::Ident(param_name) = &args[0] {
+                let param_type = parse_type(name);
+                if param_type != Type::Unknown {
+                    return Some((param_name.clone(), param_type));
+                }
+            }
+        }
+    }
+    println!("Invalid parameter specification. Expected `type(name)`, e.g., `int(x)`.");
+    None
+}
+
+/// Extracts a `Type` from an expression that should be a simple identifier, e.g., `int`.
+///
+/// # Arguments
+///
+/// * `expr` - The expression to parse.
+///
+/// # Returns
+///
+/// An `Option` containing the `Type`, or `None` if the expression is not a valid type identifier.
+fn parse_type_from_expr(expr: &Expr) -> Option<Type> {
+    if let Expr::Ident(name) = expr {
+        let ty = parse_type(name);
+        if ty != Type::Unknown {
+            return Some(ty);
+        }
+    }
+    println!("Invalid type expression. Expected a type name like `int`, `float`, etc.");
+    None
+}
+
+/// Evaluates an AST expression into a runtime `Value`.
+/// This is the core interpreter loop, handling special forms (`let`, `func`, `if`),
+/// built-in operations, and user-defined function calls (closures).
+///
+/// # Arguments
+///
+/// * `expr` - The AST node to evaluate.
+/// * `env` - The mutable current environment for variable lookups and assignments.
+///
+/// # Returns
+///
+/// An `Option<Value>` containing the result of the evaluation, or `None` if a runtime error occurs.
 fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
     match expr {
         Expr::Number(n) => Some(Value::Int(*n)),
@@ -398,73 +583,45 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                 env.insert(var_name, typed_value);
                 None
             }
-            // Function definition: func(int(x), int(<body>))
+            // Function definition: func(param1, param2, ..., return_type, body)
             "func" => {
-                // func(...(x), ...(body)) where ... is a type
-                if args.len() != 2 {
-                    println!("func() expects at least 2 arguments: param_spec, return_typed(body)");
+                if args.len() < 2 {
+                    println!("func() expects at least 2 arguments: return_type, body");
                     return None;
                 }
 
-                // Param spec: e.g., int(x)
-                let (param_name, param_ty) = match &args[0] {
-                    Expr::Call {
-                        name: ty_name,
-                        args: inner,
-                    } => {
-                        if inner.len() != 1 {
-                            println!(
-                                "paramater spec {}() expectes exactly one identifier",
-                                ty_name
-                            );
-                            return None;
+                let body_expr = args.last().unwrap().clone();
+                let return_type_expr = &args[args.len() - 2];
+                let param_specs = &args[0..args.len() - 2];
+
+                let mut param_names = Vec::new();
+                let mut param_types = Vec::new();
+
+                for spec in param_specs {
+                    match parse_param_spec(spec) {
+                        Some((name, ty)) => {
+                            param_names.push(name);
+                            param_types.push(ty);
                         }
-                        let pname = match &inner[0] {
-                            Expr::Ident(s) => s.clone(),
-                            _ => {
-                                println!("paramater spec must be like int(x) with identifier");
-                                return None;
-                            }
-                        };
-                        (pname, parse_type(ty_name))
+                        None => return None,
                     }
-                    _ => {
-                        println!("First argument to func must be a param spec like int(x)");
+                }
+
+                let ret_type = match parse_type_from_expr(return_type_expr) {
+                    Some(ty) => ty,
+                    None => {
+                        println!("Invalid return type specified for func");
                         return None;
                     }
                 };
 
-                // Return type wrapper: e.g., int(*(x, x))
-                let (ret_ty, body_expr) = match &args[1] {
-                    Expr::Call {
-                        name: ty_name,
-                        args: inner,
-                    } => {
-                        if inner.len() != 1 {
-                            println!(
-                                "return type wrapper {}() expects one body expression",
-                                ty_name
-                            );
-                            return None;
-                        }
-                        (parse_type(ty_name), Box::new(inner[0].clone()))
-                    }
-                    _ => {
-                        println!(
-                            "Second argument to func() must be return_typed(body), e.g., int(<expr)"
-                        );
-                        return None;
-                    }
-                };
-
-                // Capture current env (closure)
                 let captured = env.clone();
 
                 Some(Value::Closure {
-                    param_name,
-                    param_type: param_ty,
-                    ret_type: ret_ty,
-                    body: body_expr,
+                    param_names,
+                    param_types,
+                    ret_type,
+                    body: Box::new(body_expr),
                     env: captured,
                 })
             }
@@ -533,42 +690,46 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                 // Try user-defined function from env first
                 if let Some(val) = env.get(name) {
                     if let Value::Closure {
-                        param_name,
-                        param_type,
+                        param_names,
+                        param_types,
                         ret_type: _rt,
                         body,
                         env: captured,
                     } = val.clone()
                     {
-                        if args.len() != 1 {
-                            println!("function {} expects 1 argument", name);
+                        if args.len() != param_names.len() {
+                            println!(
+                                "function {} expects {} arguments, but got {}",
+                                name,
+                                param_names.len(),
+                                args.len()
+                            );
                             return None;
                         }
 
-                        // Evaluate arg
-                        let mut arg_val = eval(&args[0], env)?;
-
-                        // Coerce or reject based on param type
-                        arg_val = match (param_type, arg_val) {
-                            (Type::Int, v @ Value::Int(_)) => v,
-                            (Type::Int, Value::Float(f)) => Value::Int(f as i32),
-                            (Type::Float, v @ Value::Float(_)) => v,
-                            (Type::Float, Value::Int(i)) => Value::Float(i as f64),
-                            (Type::Bool, v @ Value::Boolean(_)) => v,
-                            (Type::String, v @ Value::String(_)) => v,
-                            (Type::Unknown, v) => v,
-                            (pt, v) => {
-                                println!(
-                                    "Type error: param {:?} does not accept value {:?}",
-                                    pt, v
-                                );
-                                return None;
-                            }
-                        };
-
-                        // New env for call: captured + arg binding
                         let mut call_env = captured.clone();
-                        call_env.insert(param_name, arg_val);
+                        for (i, arg_expr) in args.iter().enumerate() {
+                            let mut arg_val = eval(arg_expr, env)?;
+                            let param_type = &param_types[i];
+
+                            arg_val = match (param_type, arg_val) {
+                                (Type::Int, v @ Value::Int(_)) => v,
+                                (Type::Int, Value::Float(f)) => Value::Int(f as i32),
+                                (Type::Float, v @ Value::Float(_)) => v,
+                                (Type::Float, Value::Int(i)) => Value::Float(i as f64),
+                                (Type::Bool, v @ Value::Boolean(_)) => v,
+                                (Type::String, v @ Value::String(_)) => v,
+                                (Type::Unknown, v) => v,
+                                (pt, v) => {
+                                    println!(
+                                        "Type error: param {:?} does not accept value {:?}",
+                                        pt, v
+                                    );
+                                    return None;
+                                }
+                            };
+                            call_env.insert(param_names[i].clone(), arg_val);
+                        }
 
                         return eval(&body, &mut call_env);
                     }
@@ -596,7 +757,12 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
     }
 }
 
-/// echo(...) built-in — prints values separated by spaces
+/// Implements the `echo(...)` built-in function.
+/// Evaluates and prints all arguments separated by a space.
+///
+/// # Returns
+///
+/// Always returns `None`, as `echo` is side-effectual and does not return a value.
 fn expr_echo(args: &[Expr], env: &mut Env) -> Option<Value> {
     for arg in args {
         if let Some(v) = eval(arg, env) {
@@ -609,7 +775,12 @@ fn expr_echo(args: &[Expr], env: &mut Env) -> Option<Value> {
     None
 }
 
-/// float(x) built-in — casts int to float
+/// Implements the `float(x)` built-in function.
+/// Evaluates `x` and casts the result to a `Value::Float` if it is an Int or Float.
+///
+/// # Returns
+///
+/// An `Option<Value::Float>` on successful casting, or `None` on a type error.
 fn cast_float(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 1 {
         println!("float() takes exactly one argument");
@@ -628,71 +799,136 @@ fn cast_float(args: &[Expr], env: &mut Env) -> Option<Value> {
     }
 }
 
-/// Binary operation helper for +, -, *, /, %
+/// Helper: Checks that all `Value`s in the vector are of the exact same variant (type)
+/// as the `expected_type`.
+///
+/// # Arguments
+///
+/// * `values` - A slice of evaluated runtime values.
+/// * `expected_type` - A sample `Value` instance whose variant is used for comparison.
+///
+/// # Returns
+///
+/// `true` if all values share the same `Value` variant, `false` otherwise.
+fn all_values_same(values: &Vec<Value>, expected_type: &Value) -> bool {
+    values.iter().all(|x| {
+        return x.is_same_variant(&expected_type)
+    } )
+}
+
+/// Handles N-ary binary operations (+, -, *, /, %).
+///
+/// Evaluates all arguments, performs strict type checking (all must be the same Int or Float),
+/// and uses `try_fold` to reduce the list of arguments cumulatively.
+/// Includes logic for division-by-zero errors.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions (operands).
+/// * `kind` - The type of arithmetic operation to perform.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// The calculated `Value::Int` or `Value::Float`, or `None` on type/math errors.
 fn binop(args: &[Expr], kind: BinOpKind, env: &mut Env) -> Option<Value> {
-    if args.len() != 2 {
-        println!("Expected 2 or more arguments");
+    // Corrected argument evaluation and collection
+    let values: Vec<Value> = args.iter().filter_map(|e| eval(e, env)).collect();
+
+    // --- INITIAL CHECKS ---
+    if values.len() < 2 {
+        println!("Error: Expected 2 or more arguments.");
         return None;
-    } // Originally this only worked with 2 arguments, that's why it is named binop
+    }
 
-    //println!("{:?}", args);
-    let a = eval(&args[0], env)?;
-    let b = eval(&args[1], env)?;
+    let first_value = &values[0];
+    
+    // Check if the expected type is numeric
+    if !(first_value.is_same_variant(&Value::Int(0)) || first_value.is_same_variant(&Value::Float(0.0))) {
+        println!("Type error: Operators expect numeric operands.");
+        return None;
+    }
 
-    match (a, b) {
-        (Value::Int(x), Value::Int(y)) => {
-            let result = match kind {
-                BinOpKind::Add => x + y,
-                BinOpKind::Sub => x - y,
-                BinOpKind::Mul => x * y,
-                BinOpKind::Div => {
-                    if y == 0 {
-                        println!("Math error: division by zero");
-                        return None;
+    // Check uniformity (assuming is_same_variant is correctly implemented)
+    if !all_values_same(&values, first_value) {
+        println!("Type error: All operands should be the same type.");
+        return None;
+    }
+    // --- END CHECKS ---
+
+    // --- CORE LOGIC: UNPACK, FOLD, AND WRAP ---
+    match first_value {
+        Value::Int(_) => {
+            let mut iter = values.into_iter();
+            
+            // Unpack initial value (safe due to checks)
+            let initial: i32 = if let Value::Int(i) = iter.next().unwrap() { i } else { return None };
+
+            // Fold (reduce) the rest using i32 arithmetic
+            let final_result = iter.try_fold(initial, |acc, next_val| {
+                let next_num: i32 = if let Value::Int(i) = next_val { i } else { return None }; // Should be safe
+                
+                match kind {
+                    BinOpKind::Add => Some(acc + next_num),
+                    BinOpKind::Sub => Some(acc - next_num),
+                    BinOpKind::Mul => Some(acc * next_num),
+                    BinOpKind::Div => {
+                        if next_num == 0 { println!("Math error: Division by zero"); None } 
+                        else { Some(acc / next_num) }
                     }
-                    x / y
-                }
-                BinOpKind::Mod => {
-                    if y == 0 {
-                        println!("Math error: modulo by zero");
-                        return None;
+                    BinOpKind::Mod => {
+                        if next_num == 0 { println!("Math error: Modulo by zero"); None } 
+                        else { Some(acc % next_num) }
                     }
-                    x % y
                 }
-            };
-            Some(Value::Int(result))
+            })?;
+            Some(Value::Int(final_result))
         }
 
-        (Value::Float(x), Value::Float(y)) => {
-            let result = match kind {
-                BinOpKind::Add => x + y,
-                BinOpKind::Sub => x - y,
-                BinOpKind::Mul => x * y,
-                BinOpKind::Div => {
-                    if y == 0.0 {
-                        println!("Math error: division by zero");
-                        return None;
+        Value::Float(_) => {
+            let mut iter = values.into_iter();
+            
+            // Unpack initial value (safe due to checks)
+            let initial: f64 = if let Value::Float(f) = iter.next().unwrap() { f } else { return None };
+
+            // Fold (reduce) the rest using f64 arithmetic
+            let final_result = iter.try_fold(initial, |acc, next_val| {
+                let next_num: f64 = if let Value::Float(f) = next_val { f } else { return None }; // Should be safe
+                
+                match kind {
+                    BinOpKind::Add => Some(acc + next_num),
+                    BinOpKind::Sub => Some(acc - next_num),
+                    BinOpKind::Mul => Some(acc * next_num),
+                    BinOpKind::Div => {
+                        if next_num == 0.0 { println!("Math error: Division by zero"); None } 
+                        else { Some(acc / next_num) }
                     }
-                    x / y
-                }
-                BinOpKind::Mod => {
-                    if y == 0.0 {
-                        println!("Math error: modulo by zero");
-                        return None;
+                    BinOpKind::Mod => {
+                        if next_num == 0.0 { println!("Math error: Modulo by zero"); None } 
+                        else { Some(acc % next_num) }
                     }
-                    x % y
                 }
-            };
-            Some(Value::Float(result))
+            })?;
+            Some(Value::Float(final_result))
         }
 
-        _ => {
-            println!("Type error: cannot operate on mixed or non-numeric types");
-            None
-        }
+        // All other non-numeric cases are caught by the initial checks
+        _ => None,
     }
 }
 
+/// Helper: Performs numeric comparisons (<, <=, >, >=) on exactly two arguments.
+/// Handles mixed Int and Float types by promoting Ints to Floats for comparison.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions (operands). Must contain exactly two elements.
+/// * `cmp` - A generic closure function (`Fn(f64, f64) -> bool`) defining the comparison logic.
+/// * `env` - The mutable current environment for evaluating arguments.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the result of the comparison, or `None` on a type or length error.
 fn cmp_numeric<F>(args: &[Expr], cmp: F, env: &mut Env) -> Option<Value>
 where
     F: Fn(f64, f64) -> bool,
@@ -715,6 +951,18 @@ where
     }
 }
 
+/// Helper: Performs equality comparisons (==, !=) on exactly two arguments.
+/// Supports comparison between numeric, string, and boolean types, including mixed Int/Float comparisons.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions (operands). Must contain exactly two elements.
+/// * `expect_equal` - A boolean flag: `true` for '==', `false` for '!='.
+/// * `env` - The mutable current environment for evaluating arguments.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the result of the equality check, or `None` on a type or length error.
 fn eq_op(args: &[Expr], expect_equal: bool, env: &mut Env) -> Option<Value> {
     if args.len() != 2 {
         println!("Equality expects 2 arguments");
@@ -739,6 +987,16 @@ fn eq_op(args: &[Expr], expect_equal: bool, env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(if expect_equal { eq } else { !eq }))
 }
 
+/// Helper: Evaluates an expression and asserts that the result is a `Value::Boolean`, returning its inner `bool`.
+///
+/// # Arguments
+///
+/// * `expr` - The AST expression to evaluate.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<bool>` containing the result on success, or `None` if the evaluation fails or the result is not a Boolean.
 fn eval_bool(expr: &Expr, env: &mut Env) -> Option<bool> {
     match eval(expr, env)? {
         Value::Boolean(b) => Some(b),
@@ -749,6 +1007,17 @@ fn eval_bool(expr: &Expr, env: &mut Env) -> Option<bool> {
     }
 }
 
+/// Implements the logical AND operator, evaluating exactly two boolean expressions.
+/// Performs short-circuit evaluation (returns false immediately if the first argument is false).
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly two elements.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the result, or `None` on a type or length error.
 fn logical_and(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 2 {
         println!("and() expects 2 arguments");
@@ -762,6 +1031,17 @@ fn logical_and(args: &[Expr], env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(b))
 }
 
+/// Implements the logical OR operator, evaluating exactly two boolean expressions.
+/// Performs short-circuit evaluation (returns true immediately if the first argument is true).
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly two elements.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the result, or `None` on a type or length error.
 fn logical_or(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 2 {
         println!("or() expects 2 arguments");
@@ -775,6 +1055,16 @@ fn logical_or(args: &[Expr], env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(b))
 }
 
+/// Implements the logical NOT operator, evaluating exactly one boolean expression.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly one element.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the inverted result, or `None` on a type or length error.
 fn logical_not(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 1 {
         println!("not() expects 1 argument");
@@ -784,6 +1074,16 @@ fn logical_not(args: &[Expr], env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(!a))
 }
 
+/// Implements the logical XOR operator, evaluating exactly two boolean expressions.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly two elements.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::Boolean>` containing the result, or `None` on a type or length error.
 fn logical_xor(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 2 {
         println!("xor() expects 2 arguments");
@@ -794,6 +1094,16 @@ fn logical_xor(args: &[Expr], env: &mut Env) -> Option<Value> {
     Some(Value::Boolean(a ^ b))
 }
 
+/// Implements the `len` built-in, returning the character length of a string.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly one element that evaluates to a `Value::String`.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::Int>` containing the length, or `None` on a type or length error.
 fn len_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 1 {
         eprintln!("len() expects 1 argument");
@@ -808,6 +1118,16 @@ fn len_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
     }
 }
 
+/// Implements the `reverse(s)` built-in, returning the reversed string.
+///
+/// # Arguments
+///
+/// * `args` - The slice of AST expressions. Must contain exactly one element that evaluates to a `Value::String`.
+/// * `env` - The mutable current environment.
+///
+/// # Returns
+///
+/// An `Option<Value::String>` containing the reversed string, or `None` on a type or length error.
 fn reverse_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
     if args.len() != 1 {
         eprintln!("reverse() expects 1 argument");
@@ -822,10 +1142,16 @@ fn reverse_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
     }
 }
 
+/// Runs the interactive Read-Eval-Print Loop (REPL).
+/// Handles printing the prompt, reading input, checking for 'exit', and passing input to `evaluate_line`.
+///
+/// # Returns
+///
+/// An `io::Result<()>` indicating success or any I/O error (reading or writing) during the session.
 fn run_repl() -> io::Result<()> {
-    let mut stdout = io::stdout();
-    let mut input = String::new();
-    let mut env = Env::new();
+    let mut stdout = io::stdout(); // stdout variable to write to
+    let mut input = String::new(); // input to evaluate
+    let mut env = Env::new(); // holds the environment of the sessions like variables and function definitions
 
     loop {
         stdout.write_all(b"rsh$ ")?;
@@ -849,7 +1175,17 @@ fn run_repl() -> io::Result<()> {
     Ok(())
 }
 
-/// Run parser + evaluator for one line of REPL input
+/// Parses and evaluates a single line of REPL input.
+/// Coordinates the pipeline: Tokenize -> Parse -> Eval. Prints the final result or an error message.
+///
+/// # Arguments
+///
+/// * `input` - The trimmed string input from the REPL line.
+/// * `env` - The mutable, persistent global environment.
+///
+/// # Returns
+///
+/// An `io::Result<()>` for I/O operations (though it primarily handles logic).
 fn evaluate_line(input: String, env: &mut Env) -> io::Result<()> {
     let tokens = tokenize(&input);
     let mut parser = Parser::new(tokens);
