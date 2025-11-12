@@ -38,18 +38,18 @@ That will bring you into a REPL. Everything in rshell functions as a function an
  * `%(a, b, ...)` - Add two or more numbers
 
 ### Comparison
- * <(a, b) - Less than
- * <=(a, b) - Less than or equal to
- * >(a, b) - More than
- * >=(a, b) - More than or equal to
- * ==(a, b) - Equal to
- * !=(a, b) - Not equal to
+ * `<(a, b)` - Less than
+ * `<=(a, b)` - Less than or equal to
+ * `>(a, b)` - More than
+ * `>=(a, b)` - More than or equal to
+ * `==(a, b)` - Equal to
+ * `!=(a, b)` - Not equal to
 
 ### Logical
- * and(a, b) - Logical AND
- * or(a, b) - Logical OR
- * not(a) - Logical NOT
- * xor(a, b) - Logical XOR
+ * `and(a, b)` - Logical AND
+ * `or(a, b)` - Logical OR
+ * `not(a)` - Logical NOT
+ * `xor(a, b)` - Logical XOR
 
 ### Utility functions
  * `echo(...)` - prints the argument to the console
@@ -57,4 +57,10 @@ That will bring you into a REPL. Everything in rshell functions as a function an
  * `len(string)` - Returns the length of a string
  * `reverse(string)` - Reverses a string
 
+## Examples
+
+```
+let(square, func(int(x), int, *(x, x)))
+let(cube, func(int(x), int, *(x, x, x)))
+```
 You can type `exit` to leave the REPL.
