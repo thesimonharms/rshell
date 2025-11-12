@@ -68,7 +68,7 @@ enum Value {
         /// The body of the function, stored as an unevaluated AST expression.
         body: Box<Expr>,
         /// The environment captured at the time the function was defined.
-        env: Env, 
+        env: Env,
     },
 }
 
@@ -152,12 +152,7 @@ impl std::fmt::Display for Value {
             } => {
                 let params_str: Vec<String> =
                     param_types.iter().map(|t| format!("{:?}", t)).collect();
-                write!(
-                    f,
-                    "<closure ({}) -> {:?}>",
-                    params_str.join(", "),
-                    ret_type
-                )
+                write!(f, "<closure ({}) -> {:?}>", params_str.join(", "), ret_type)
             }
         }
     }
@@ -263,8 +258,9 @@ fn tokenize(input: &str) -> Vec<Token> {
                 let mut number = String::new(); // store the number as a string literal during tokenization
                 let mut has_dot = false; // flag for when the number contains a decimal component
 
-                while let Some(&c) = chars.peek() { // decimal logic and error checking
-                    if c.is_digit(10) {
+                while let Some(&c) = chars.peek() {
+                    // decimal logic and error checking
+                    if c.is_ascii_digit() {
                         number.push(c);
                         chars.next();
                     } else if c == '.' && !has_dot {
@@ -296,7 +292,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             // Identifier (variable or function name)
             c if is_ident_start(c) => {
                 let mut ident = String::new();
-                while chars.peek().map_or(false, |c| is_ident_char(*c)) {
+                while chars.peek().is_some_and(|c| is_ident_char(*c)) {
                     ident.push(chars.next().unwrap());
                 }
                 tokens.push(Token::Ident(ident));
@@ -442,16 +438,14 @@ impl Parser {
 /// An `Option` containing a tuple of the parameter name (`String`) and its `Type`,
 /// or `None` if the expression is not a valid parameter specification.
 fn parse_param_spec(expr: &Expr) -> Option<(String, Type)> {
-    if let Expr::Call { name, args } = expr {
-        if args.len() == 1 {
-            if let Expr::Ident(param_name) = &args[0] {
+    if let Expr::Call { name, args } = expr
+        && args.len() == 1
+            && let Expr::Ident(param_name) = &args[0] {
                 let param_type = parse_type(name);
                 if param_type != Type::Unknown {
                     return Some((param_name.clone(), param_type));
                 }
             }
-        }
-    }
     println!("Invalid parameter specification. Expected `type(name)`, e.g., `int(x)`.");
     None
 }
@@ -521,13 +515,11 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                     name: fname,
                     args: _fargs,
                 } = value_expr
-                {
-                    if fname == "func" {
+                    && fname == "func" {
                         let val = eval(value_expr, env)?;
                         env.insert(var_name, val);
                         return None;
                     }
-                }
 
                 // Otherwise: expect a typed constructor like int(...)
                 let typed_value = match value_expr {
@@ -655,31 +647,31 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
             }
 
             // Builtin math functions
-            "+" => binop(&args, BinOpKind::Add, env),
-            "-" => binop(&args, BinOpKind::Sub, env),
-            "*" => binop(&args, BinOpKind::Mul, env),
-            "/" => binop(&args, BinOpKind::Div, env),
-            "%" => binop(&args, BinOpKind::Mod, env),
+            "+" => binop(args, BinOpKind::Add, env),
+            "-" => binop(args, BinOpKind::Sub, env),
+            "*" => binop(args, BinOpKind::Mul, env),
+            "/" => binop(args, BinOpKind::Div, env),
+            "%" => binop(args, BinOpKind::Mod, env),
 
             // Equality operators
-            "<" => cmp_numeric(&args, |a, b| a < b, env),
-            "<=" => cmp_numeric(&args, |a, b| a <= b, env),
-            ">" => cmp_numeric(&args, |a, b| a > b, env),
-            ">=" => cmp_numeric(&args, |a, b| a >= b, env),
-            "==" => eq_op(&args, true, env),
-            "!=" => eq_op(&args, false, env),
+            "<" => cmp_numeric(args, |a, b| a < b, env),
+            "<=" => cmp_numeric(args, |a, b| a <= b, env),
+            ">" => cmp_numeric(args, |a, b| a > b, env),
+            ">=" => cmp_numeric(args, |a, b| a >= b, env),
+            "==" => eq_op(args, true, env),
+            "!=" => eq_op(args, false, env),
 
             // Logical operators
-            "and" => logical_and(&args, env),
-            "or" => logical_or(&args, env),
-            "not" => logical_not(&args, env),
-            "xor" => logical_xor(&args, env),
+            "and" => logical_and(args, env),
+            "or" => logical_or(args, env),
+            "not" => logical_not(args, env),
+            "xor" => logical_xor(args, env),
 
             // Other builtins
-            "echo" => expr_echo(&args, env),
-            "float" => cast_float(&args, env),
-            "len" => len_builtin(&args, env),
-            "reverse" => reverse_builtin(&args, env),
+            "echo" => expr_echo(args, env),
+            "float" => cast_float(args, env),
+            "len" => len_builtin(args, env),
+            "reverse" => reverse_builtin(args, env),
             "__dbg_info" => {
                 println!("rshell v0.1 by Simon Harms");
                 None
@@ -688,8 +680,8 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
             // User defined function calls
             _ => {
                 // Try user-defined function from env first
-                if let Some(val) = env.get(name) {
-                    if let Value::Closure {
+                if let Some(val) = env.get(name)
+                    && let Value::Closure {
                         param_names,
                         param_types,
                         ret_type: _rt,
@@ -733,7 +725,6 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
 
                         return eval(&body, &mut call_env);
                     }
-                }
 
                 println!("Unknown function: {}", name);
                 None
@@ -810,10 +801,10 @@ fn cast_float(args: &[Expr], env: &mut Env) -> Option<Value> {
 /// # Returns
 ///
 /// `true` if all values share the same `Value` variant, `false` otherwise.
-fn all_values_same(values: &Vec<Value>, expected_type: &Value) -> bool {
-    values.iter().all(|x| {
-        return x.is_same_variant(&expected_type)
-    } )
+fn all_values_same(values: &[Value], expected_type: &Value) -> bool {
+    values
+        .iter()
+        .all(|x| x.is_same_variant(expected_type))
 }
 
 /// Handles N-ary binary operations (+, -, *, /, %).
@@ -842,9 +833,11 @@ fn binop(args: &[Expr], kind: BinOpKind, env: &mut Env) -> Option<Value> {
     }
 
     let first_value = &values[0];
-    
+
     // Check if the expected type is numeric
-    if !(first_value.is_same_variant(&Value::Int(0)) || first_value.is_same_variant(&Value::Float(0.0))) {
+    if !(first_value.is_same_variant(&Value::Int(0))
+        || first_value.is_same_variant(&Value::Float(0.0)))
+    {
         println!("Type error: Operators expect numeric operands.");
         return None;
     }
@@ -860,25 +853,41 @@ fn binop(args: &[Expr], kind: BinOpKind, env: &mut Env) -> Option<Value> {
     match first_value {
         Value::Int(_) => {
             let mut iter = values.into_iter();
-            
+
             // Unpack initial value (safe due to checks)
-            let initial: i32 = if let Value::Int(i) = iter.next().unwrap() { i } else { return None };
+            let initial: i32 = if let Value::Int(i) = iter.next().unwrap() {
+                i
+            } else {
+                return None;
+            };
 
             // Fold (reduce) the rest using i32 arithmetic
             let final_result = iter.try_fold(initial, |acc, next_val| {
-                let next_num: i32 = if let Value::Int(i) = next_val { i } else { return None }; // Should be safe
-                
+                let next_num: i32 = if let Value::Int(i) = next_val {
+                    i
+                } else {
+                    return None;
+                }; // Should be safe
+
                 match kind {
                     BinOpKind::Add => Some(acc + next_num),
                     BinOpKind::Sub => Some(acc - next_num),
                     BinOpKind::Mul => Some(acc * next_num),
                     BinOpKind::Div => {
-                        if next_num == 0 { println!("Math error: Division by zero"); None } 
-                        else { Some(acc / next_num) }
+                        if next_num == 0 {
+                            println!("Math error: Division by zero");
+                            None
+                        } else {
+                            Some(acc / next_num)
+                        }
                     }
                     BinOpKind::Mod => {
-                        if next_num == 0 { println!("Math error: Modulo by zero"); None } 
-                        else { Some(acc % next_num) }
+                        if next_num == 0 {
+                            println!("Math error: Modulo by zero");
+                            None
+                        } else {
+                            Some(acc % next_num)
+                        }
                     }
                 }
             })?;
@@ -887,25 +896,41 @@ fn binop(args: &[Expr], kind: BinOpKind, env: &mut Env) -> Option<Value> {
 
         Value::Float(_) => {
             let mut iter = values.into_iter();
-            
+
             // Unpack initial value (safe due to checks)
-            let initial: f64 = if let Value::Float(f) = iter.next().unwrap() { f } else { return None };
+            let initial: f64 = if let Value::Float(f) = iter.next().unwrap() {
+                f
+            } else {
+                return None;
+            };
 
             // Fold (reduce) the rest using f64 arithmetic
             let final_result = iter.try_fold(initial, |acc, next_val| {
-                let next_num: f64 = if let Value::Float(f) = next_val { f } else { return None }; // Should be safe
-                
+                let next_num: f64 = if let Value::Float(f) = next_val {
+                    f
+                } else {
+                    return None;
+                }; // Should be safe
+
                 match kind {
                     BinOpKind::Add => Some(acc + next_num),
                     BinOpKind::Sub => Some(acc - next_num),
                     BinOpKind::Mul => Some(acc * next_num),
                     BinOpKind::Div => {
-                        if next_num == 0.0 { println!("Math error: Division by zero"); None } 
-                        else { Some(acc / next_num) }
+                        if next_num == 0.0 {
+                            println!("Math error: Division by zero");
+                            None
+                        } else {
+                            Some(acc / next_num)
+                        }
                     }
                     BinOpKind::Mod => {
-                        if next_num == 0.0 { println!("Math error: Modulo by zero"); None } 
-                        else { Some(acc % next_num) }
+                        if next_num == 0.0 {
+                            println!("Math error: Modulo by zero");
+                            None
+                        } else {
+                            Some(acc % next_num)
+                        }
                     }
                 }
             })?;
