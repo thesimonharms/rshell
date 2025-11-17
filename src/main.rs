@@ -57,6 +57,9 @@ enum Value {
     /// A runtime boolean value.
     Boolean(bool),
 
+    /// A runtime list
+    List(Vec<Value>),
+
     /// A function/closure value, capturing its environment for lexical scoping.
     Closure {
         /// The names of the parameters accepted by this function.
@@ -91,11 +94,12 @@ impl Value {
     ///
     /// `true` if both `self` and `other` are the same numeric variant, `false` otherwise.
     pub fn is_same_variant(&self, other: &Value) -> bool {
-        // TODO: add capability to make it work with strings and other types like booleans.
         match (self, other) {
             // Works only with specified Value shapes
             (Value::Int(_), Value::Int(_)) => true,
             (Value::Float(_), Value::Float(_)) => true,
+            (Value::String(_), Value::String(_)) => true,
+            (Value::Boolean(_), Value::Boolean(_)) => true,
             // Fails on everything else
             _ => false,
         }
@@ -113,6 +117,10 @@ enum Type {
     Bool,
     /// Represents the string type.
     String,
+    /// Represents the list type.
+    List,
+    // TODO: Add Stack type
+    // TODO: Add an immutable list type (e.g., Tuple or ImmutableList)
     /// A fallback used for unrecognized or generic types.
     Unknown,
 }
@@ -133,6 +141,7 @@ fn parse_type(name: &str) -> Type {
         "float" => Type::Float,
         "bool" => Type::Bool,
         "string" => Type::String,
+        "list" => Type::List,
         _ => Type::Unknown,
     }
 }
@@ -143,8 +152,12 @@ impl std::fmt::Display for Value {
         match self {
             Value::Int(i) => write!(f, "{}", i),
             Value::Float(fl) => write!(f, "{}", fl),
-            Value::String(s) => write!(f, "{}", s),
+            Value::String(s) => write!(f, "\"{}\"", s), // Add quotes for string literals
             Value::Boolean(b) => write!(f, "{}", b),
+            Value::List(l) => {
+                let inner_str: Vec<String> = l.iter().map(|v| format!("{}", v)).collect();
+                write!(f, "({})", inner_str.join(", "))
+            }
             Value::Closure {
                 param_types,
                 ret_type,
@@ -470,6 +483,18 @@ fn parse_type_from_expr(expr: &Expr) -> Option<Type> {
     None
 }
 
+/// Gets the `Type` from a runtime `Value`.
+fn get_type(value: &Value) -> Type {
+    match value {
+        Value::Int(_) => Type::Int,
+        Value::Float(_) => Type::Float,
+        Value::String(_) => Type::String,
+        Value::Boolean(_) => Type::Bool,
+        Value::List(_) => Type::List,
+        Value::Closure { .. } => Type::Unknown, // Closures don't have a simple type name
+    }
+}
+
 /// Evaluates an AST expression into a runtime `Value`.
 /// This is the core interpreter loop, handling special forms (`let`, `func`, `if`),
 /// built-in operations, and user-defined function calls (closures).
@@ -522,45 +547,68 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                     }
 
                 // Otherwise: expect a typed constructor like int(...)
+                // TODO: Refactor type constructors (int, float, string, bool, list) to be top-level functions in eval,
+                // similar to '+', 'if', etc. This would make them independent of the 'let' statement and
+                // simplify the logic.
                 let typed_value = match value_expr {
                     Expr::Call {
                         name: type_name,
                         args: inner_args,
                     } => {
-                        if inner_args.len() != 1 {
-                            println!("Type constructor {}() expects 1 argument", type_name);
-                            return None;
-                        }
+                        if type_name == "list" {
+                            if inner_args.is_empty() {
+                                println!("Type constructor list() expects at least 1 argument (a type).");
+                                return None;
+                            }
+                            let list_type = parse_type_from_expr(&inner_args[0])?;
+                            let mut elements = Vec::new();
+                            for val_expr in &inner_args[1..] {
+                                let processed_val = eval(val_expr, env)?;
+                                let val_type = get_type(&processed_val);
 
-                        let val = eval(&inner_args[0], env)?;
-                        match type_name.as_str() {
-                            "int" => match val {
-                                Value::Float(f) => Some(Value::Int(f as i32)), // temporary cast
-                                Value::Int(i) => Some(Value::Int(i)),
+                                if val_type == list_type {
+                                    elements.push(processed_val);
+                                } else {
+                                    println!("Incompatible types in list. Expected {:?} but found {:?}.", list_type, val_type);
+                                    return None;
+                                }
+                            }
+                            Some(Value::List(elements))
+                        } else {
+                            if inner_args.len() != 1 {
+                                println!("Type constructor {}() expects 1 argument", type_name);
+                                return None;
+                            }
+                            let val = eval(&inner_args[0], env)?;
+                            match type_name.as_str() {
+                                "int" => match val {
+                                    Value::Float(f) => Some(Value::Int(f as i32)), // temporary cast
+                                    Value::Int(i) => Some(Value::Int(i)),
+                                    _ => {
+                                        println!("Cannot convert {:?} to int", val);
+                                        None
+                                    }
+                                },
+                                "float" => match val {
+                                    Value::Int(i) => Some(Value::Float(i as f64)),
+                                    Value::Float(f) => Some(Value::Float(f)),
+                                    _ => {
+                                        println!("Cannot convert {:?} to float", val);
+                                        None
+                                    }
+                                },
+                                "string" => Some(Value::String(format!("{}", val))),
+                                "bool" => match val {
+                                    Value::Boolean(b) => Some(Value::Boolean(b)),
+                                    _ => {
+                                        println!("Cannot convert {:?} to bool", val);
+                                        None
+                                    }
+                                },
                                 _ => {
-                                    println!("Cannot convert {:?} to int", val);
+                                    println!("Unknown type constructor: {}", type_name);
                                     None
                                 }
-                            },
-                            "float" => match val {
-                                Value::Int(i) => Some(Value::Float(i as f64)),
-                                Value::Float(f) => Some(Value::Float(f)),
-                                _ => {
-                                    println!("Cannot convert {:?} to float", val);
-                                    None
-                                }
-                            },
-                            "string" => Some(Value::String(format!("{}", val))),
-                            "bool" => match val {
-                                Value::Boolean(b) => Some(Value::Boolean(b)),
-                                _ => {
-                                    println!("Cannot convert {:?} to bool", val);
-                                    None
-                                }
-                            },
-                            _ => {
-                                println!("Unknown type constructor: {}", type_name);
-                                None
                             }
                         }
                     }
@@ -676,6 +724,12 @@ fn eval(expr: &Expr, env: &mut Env) -> Option<Value> {
                 println!("rshell v0.1 by Simon Harms");
                 None
             }
+
+            // TODO: Implement list/stack manipulation functions
+            // - get(list, index)
+            // - set(list, index, value) -> returns new list
+            // - push(list, value) -> returns new list
+            // - pop(list) -> returns [value, new_list]
 
             // User defined function calls
             _ => {
@@ -1135,6 +1189,7 @@ fn len_builtin(args: &[Expr], env: &mut Env) -> Option<Value> {
         return None;
     }
     match eval(&args[0], env)? {
+        // TODO: Add support for len(list)
         Value::String(s) => Some(Value::Int(s.chars().count() as i32)),
         other => {
             eprintln!("TypeError: len() expects string, got {:?}", other);
