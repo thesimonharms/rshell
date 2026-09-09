@@ -1,3 +1,7 @@
+> **Moved.** This GitHub copy is an archive. Use the Forgejo repository.
+>
+> **Canonical repository:** https://git.simonharms.com/thesimonharms/rshell
+
 # rshell
 
 An interpreted programming language featuring static types and a unique functional syntax.
